@@ -1,4 +1,21 @@
 import numpy as np
+import struct
+
+def load_mnist_images(filename):
+    with open(filename, 'rb') as f:
+        magic, num_images, rows, cols = struct.unpack(">IIII", f.read(16))
+        images = np.frombuffer(f.read(), dtype=np.uint8)
+        images = images.reshape(num_images, rows, cols)
+        images = images.astype(np.float32) / 255.0
+
+    return images
+
+def load_mnist_labels(filename):
+    with open(filename, 'rb') as f:
+        magic, num_labels = struct.unpack(">II", f.read(8))
+        labels = np.frombuffer(f.read(), dtype=np.uint8)
+
+    return labels
 
 np.random.seed(0)
 
@@ -18,9 +35,18 @@ def convolve(image, kernel, stride = 1, padding = 0):
     
     return convolve_out
 
+# CONVOLUTION FOR MULTIPLE KERNELS
+def conv_layer_forward(image, kernels, stride = 1, padding = 0):
+    feature_maps = []
+    for kernel in kernels:
+        feature_map = convolve(image, kernel, stride, padding)
+        feature_maps.append(feature_map)
+
+    return np.array(feature_maps)
+
 #2. RECTIFIED LINEAR UNIT
-def relu(feature_map):
-    relu_out = np.maximum(0, feature_map)
+def relu(feature_maps):
+    relu_out = np.maximum(0, feature_maps)
 
     return relu_out
 
@@ -38,6 +64,14 @@ def max_pool(relu_out, pool_size = 2, stride = 2):
             pool_out[i, j] = np.max(patch)
 
     return pool_out
+
+# POOLING FOR MULTIPLE FEATURE MAPS AKA OUTPUTS FROM 
+def pool_layer_forward(feature_maps, pool_size = 2, stride = 2):
+    pooled_maps = []
+    for feature in feature_maps:
+        pooled_maps.append(max_pool(feature, pool_size, stride))
+
+    return np.array(pooled_maps)
 
 #4. FLATTEN
 def flatten(pool_out):
@@ -105,6 +139,15 @@ def max_pool_backward(relu_out, pool_out_grad, pool_size = 2, stride = 2):
     
     return relu_out_grad
 
+## MULTI KERNEL BACKWARD POOLING
+def pool_layer_backward(relu_out, pooled_maps_grad, pool_size = 2, stride = 2):
+    relu_maps_grad = []
+    
+    for output, pooled_map_grad in zip(relu_out, pooled_maps_grad):
+        relu_maps_grad.append(max_pool_backward(output, pooled_map_grad, pool_size, stride))
+
+    return np.array(relu_maps_grad)
+
 #5. RELU BACKWARD
 def relu_backward(relu_out_grad, convolve_out):
     conv_out_grad = relu_out_grad * (convolve_out > 0)
@@ -118,7 +161,7 @@ def convolve_backward(image, kernel, conv_out_grad, stride = 1, padding = 0):
     else:
         padded_image = image
     dKernel = np.zeros_like(kernel, dtype=float)
-    dInput = np.zeros_like(image, dtype=float)
+    dInput = np.zeros_like(padded_image, dtype=float)
 
     output_size = conv_out_grad.shape[0]
 
@@ -129,107 +172,137 @@ def convolve_backward(image, kernel, conv_out_grad, stride = 1, padding = 0):
             patch = padded_image[row:row+kernel.shape[0], col:col+kernel.shape[1]]
             dKernel += (patch * conv_out_grad[i, j])
             dInput[row:row+kernel.shape[0], col:col+kernel.shape[1]] += (kernel * conv_out_grad[i, j])
-            if padding > 0:
-                dInput = dInput[padding:-padding,padding:-padding]
+    if padding > 0:
+        dInput = dInput[padding:-padding,padding:-padding]
 
     return dKernel, dInput
 
-def forward(image, kernel, W, b, y_true):
-    conv_out = convolve(image, kernel, stride=1, padding=0)
-    relu_out = relu(conv_out)
-    pool_out = max_pool(relu_out, pool_size=2, stride=2)
-    flattened = flatten(pool_out)
-    scores = dense_forward(flattened, W, b)
-    y_pred = softmax(scores)
+#MULTI KERNEL BACKWARD CONVOLUTION
+def conv_layer_backward(image, kernels, feature_maps_grad, stride = 1, padding = 0):
+    kernels_grad = np.zeros_like(kernels, dtype=float)
+    image_grad = np.zeros_like(image, dtype=float)
+
+    for kernel_index in range(len(kernels)):
+        kernel_grad, single_image_grad = (convolve_backward(image, kernels[kernel_index], feature_maps_grad[kernel_index], stride, padding))
+
+        kernels_grad[kernel_index] = kernel_grad
+        image_grad += (single_image_grad)
+
+    return kernels_grad, image_grad
+
+def forward(image, kernels, W1, b1, W2, b2, y_true):
+    feature_maps = conv_layer_forward(image, kernels, stride=1, padding=0)
+    relu_out = relu(feature_maps)
+    pooled_maps = pool_layer_forward(relu_out, pool_size=2, stride=2)
+    flattened = flatten(pooled_maps)
+    hidden_scores = dense_forward(flattened, W1, b1)
+    hidden_relu = relu(hidden_scores)
+    output_scores = dense_forward(hidden_relu, W2, b2)
+    y_pred = softmax(output_scores)
     loss = cross_entropy(y_true, y_pred)
 
     cache = {
     "image": image,
-    "conv_out": conv_out,
+    "feature_maps": feature_maps,
     "relu_out": relu_out,
-    "pool_out": pool_out,
+    "pooled_maps": pooled_maps,
     "flattened": flattened,
-    "scores": scores
+    "hidden_scores": hidden_scores,
+    "hidden_relu": hidden_relu
     }
 
     return loss, y_pred, cache
 
-def backward(y_pred, y_true, cache, kernel, W):
+def backward(y_pred, y_true, cache, kernels, W1, W2):
     score_grad = cross_entropy_backward(y_pred, y_true)
-    dW, db, flattened_grad = dense_backward(cache["flattened"], W, score_grad)
-    pool_out_grad = flatten_backward(flattened_grad, cache["pool_out"].shape)
-    relu_out_grad = max_pool_backward(cache["relu_out"], pool_out_grad, pool_size=2, stride=2)
-    conv_out_grad = relu_backward(relu_out_grad, cache["conv_out"])
-    dKernel, dInput = convolve_backward(cache["image"], kernel, conv_out_grad, stride=1, padding=0)
+    dW2, db2, hidden_relu_grad = dense_backward(cache["hidden_relu"], W2, score_grad)
+    hidden_score_grad = relu_backward(hidden_relu_grad, cache["hidden_scores"])
+    dW1, db1, flattened_grad = dense_backward(cache["flattened"], W1, hidden_score_grad)
+    pooled_maps_grad = flatten_backward(flattened_grad, cache["pooled_maps"].shape)
+    relu_out_grad = pool_layer_backward(cache["relu_out"], pooled_maps_grad, pool_size=2, stride=2)
+    feature_maps_grad = relu_backward(relu_out_grad, cache["feature_maps"])
+    kernels_grad, image_grad = conv_layer_backward(cache["image"], kernels, feature_maps_grad, stride=1, padding=0)
 
-    return dKernel, dW, db
+    return kernels_grad, dW1, db1, dW2, db2
 
-def update(kernel, W, b, dKernel, dW, db, lr):
-    W  = W - lr * dW
-    b = b - lr * db
-    kernel = kernel - lr * dKernel
+def update(kernels, W1, W2, b1, b2, kernels_grad, dW1, dW2, db1, db2, lr):
+    W1  = W1 - lr * dW1
+    b1 = b1 - lr * db1
+    W2  = W2 - lr * dW2
+    b2 = b2 - lr * db2
+    kernels = kernels - lr * kernels_grad
     
-    return kernel, W, b
+    return kernels, W1, b1, W2, b2
 
-image = np.array([
-    [1,1,1,0,0],
-    [0,1,1,1,0],
-    [0,0,1,1,1],
-    [1,1,0,0,1],
-    [1,0,1,0,1]
-])
+def one_hot(label):
+    vector = np.zeros(10)
+    vector[label] = 1
 
-y_true = np.array([1,0])
+    return vector
 
-vertical_line = np.array([
-    [1,0,0,1,0],
-    [1,0,0,1,0],
-    [1,0,0,1,0],
-    [1,0,0,1,0],
-    [1,0,0,1,0]
-])
+image = np.random.randn(28,28)
+kernels= np.random.randn(8,3,3) * 0.01
+W1 = np.random.randn(1352, 64) * 0.01
+b1 = np.zeros(64)
+W2 = np.random.randn(64, 10) * 0.01
+b2 = np.zeros(10)
 
-vertical_label = np.array([1,0])
+train_images = load_mnist_images(
+    "train-images.idx3-ubyte"
+)
 
-horizontal_line = np.array([
-    [1,1,1,1,1],
-    [0,0,0,0,0],
-    [0,0,0,0,0],
-    [0,0,0,0,0],
-    [1,1,1,1,1]
-])
+train_labels = load_mnist_labels(
+    "train-labels.idx1-ubyte"
+)
 
-horizontal_label = np.array([0,1])
+sample_image = train_images[0]
 
-vertical_line_2 = np.array([
-    [1,0,0,1,0],
-    [1,0,1,1,0],
-    [1,0,0,1,0],
-    [1,1,0,1,0],
-    [1,0,0,1,0]
-])
+sample_label = one_hot(
+    train_labels[0]
+)
 
-horizontal_line_2 = np.array([
-    [1,1,1,1,1],
-    [0,0,1,0,0],
-    [0,0,0,0,0],
-    [0,1,0,0,0],
-    [1,1,1,1,1]
-])
+loss, y_pred, cache = forward(
+    sample_image,
+    kernels,
+    W1,
+    b1,
+    W2,
+    b2,
+    sample_label
+)
 
-kernel = np.random.randn(2,2) * 0.01
-W = np.random.randn(4,2) * 0.01
-b = np.zeros(2)
+kernels_grad, dW1, db1, dW2, db2 = backward(
+    y_pred,
+    sample_label,
+    cache,
+    kernels,
+    W1,
+    W2
+)
 
-training_images = [vertical_line, vertical_line_2, horizontal_line, horizontal_line_2]
-training_labels = [vertical_label, horizontal_label]
+kernels, W1, b1, W2, b2 = update(
+    kernels,
+    W1,
+    W2,
+    b1,
+    b2,
+    kernels_grad,
+    dW1,
+    dW2,
+    db1,
+    db2,
+    0.01
+)
 
-for epoch in range(5000):
-    total_loss = 0
-    for image, label in zip(training_images, training_labels):
-        loss, y_pred, cache = forward(image, kernel, W, b, label)
-        dKernel, dW, db = backward(y_pred, label, cache, kernel, W)
-        kernel, W, b = update(kernel, W, b, dKernel, dW, db, 0.01)
-        total_loss += loss
-    if epoch % 100 == 0:
-        print(f"Epoch {epoch}: "f"{total_loss:.4f}")
+new_loss, _, _ = forward(
+    sample_image,
+    kernels,
+    W1,
+    b1,
+    W2,
+    b2,
+    sample_label
+)
+
+print(loss)
+print(new_loss)
