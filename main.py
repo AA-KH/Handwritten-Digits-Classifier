@@ -247,62 +247,55 @@ b1 = np.zeros(64)
 W2 = np.random.randn(64, 10) * 0.01
 b2 = np.zeros(10)
 
-train_images = load_mnist_images(
-    "train-images.idx3-ubyte"
-)
+train_images = load_mnist_images("train-images.idx3-ubyte")
 
-train_labels = load_mnist_labels(
-    "train-labels.idx1-ubyte"
-)
+train_labels = load_mnist_labels("train-labels.idx1-ubyte")
 
-sample_image = train_images[0]
+train_images = train_images[:1000]
+train_labels = train_labels[:1000]
 
-sample_label = one_hot(
-    train_labels[0]
-)
+for epoch in range(20):
+    total_loss = 0
 
-loss, y_pred, cache = forward(
-    sample_image,
-    kernels,
-    W1,
-    b1,
-    W2,
-    b2,
-    sample_label
-)
+    for image, label in zip(train_images,train_labels):
+        y_true = one_hot(label)
+        loss, y_pred, cache = forward(image, kernels, W1, b1, W2, b2, y_true)
+        kernels_grad, dW1, db1, dW2, db2 = backward(y_pred, y_true, cache, kernels, W1, W2)
+        kernels, W1, b1, W2, b2 = update(kernels, W1, W2, b1, b2, kernels_grad, dW1, dW2, db1, db2, 0.01)
 
-kernels_grad, dW1, db1, dW2, db2 = backward(
-    y_pred,
-    sample_label,
-    cache,
-    kernels,
-    W1,
-    W2
-)
+        total_loss += loss
 
-kernels, W1, b1, W2, b2 = update(
-    kernels,
-    W1,
-    W2,
-    b1,
-    b2,
-    kernels_grad,
-    dW1,
-    dW2,
-    db1,
-    db2,
-    0.01
-)
+    print(f"Epoch {epoch}: "f"{total_loss:.4f}")
 
-new_loss, _, _ = forward(
-    sample_image,
-    kernels,
-    W1,
-    b1,
-    W2,
-    b2,
-    sample_label
-)
+    correct = 0
 
-print(loss)
-print(new_loss)
+    for image, label in zip(train_images,
+        train_labels
+    ):
+
+        y_true = one_hot(label)
+
+        _, y_pred, _ = forward(
+            image,
+            kernels,
+            W1,
+            b1,
+            W2,
+            b2,
+            y_true
+        )
+
+        prediction = np.argmax(y_pred)
+
+        if prediction == label:
+            correct += 1
+
+    accuracy = (
+        correct /
+        len(train_images)
+    )
+
+    print(
+        f"Accuracy: "
+        f"{accuracy:.4f}"
+    )
