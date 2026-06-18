@@ -269,33 +269,13 @@ for epoch in range(20):
 
     correct = 0
 
-    for image, label in zip(train_images,
-        train_labels
-    ):
-
+    for image, label in zip(train_images,train_labels):
         y_true = one_hot(label)
-
-        _, y_pred, _ = forward(
-            image,
-            kernels,
-            W1,
-            b1,
-            W2,
-            b2,
-            y_true
-        )
-
+        _, y_pred, _ = forward(image,kernels,W1,b1,W2,b2,y_true)
         prediction = np.argmax(y_pred)
 
         if prediction == label:
             correct += 1
 
-    accuracy = (
-        correct /
-        len(train_images)
-    )
-
-    print(
-        f"Accuracy: "
-        f"{accuracy:.4f}"
-    )
+    accuracy = (correct /len(train_images))
+    print(f"Accuracy: "f"{accuracy:.4f}")
