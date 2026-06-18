@@ -36,10 +36,10 @@ def convolve(image, kernel, stride = 1, padding = 0):
     return convolve_out
 
 # CONVOLUTION FOR MULTIPLE KERNELS
-def conv_layer_forward(image, kernels, stride = 1, padding = 0):
+def conv_layer_forward(image, kernels, conv_biases, stride = 1, padding = 0):
     feature_maps = []
-    for kernel in kernels:
-        feature_map = convolve(image, kernel, stride, padding)
+    for kernel,bias in zip(kernels, conv_biases):
+        feature_map = convolve(image, kernel, stride, padding) + bias
         feature_maps.append(feature_map)
 
     return np.array(feature_maps)
@@ -180,15 +180,17 @@ def convolve_backward(image, kernel, conv_out_grad, stride = 1, padding = 0):
 #MULTI KERNEL BACKWARD CONVOLUTION
 def conv_layer_backward(image, kernels, feature_maps_grad, stride = 1, padding = 0):
     kernels_grad = np.zeros_like(kernels, dtype=float)
+    conv_biases_grad = np.zeros(len(kernels))
     image_grad = np.zeros_like(image, dtype=float)
 
     for kernel_index in range(len(kernels)):
         kernel_grad, single_image_grad = (convolve_backward(image, kernels[kernel_index], feature_maps_grad[kernel_index], stride, padding))
 
         kernels_grad[kernel_index] = kernel_grad
+        conv_biases_grad[kernel_index] = np.sum(feature_maps_grad[kernel_index])
         image_grad += (single_image_grad)
 
-    return kernels_grad, image_grad
+    return kernels_grad, conv_biases_grad, image_grad
 
 def forward(image, kernels, W1, b1, W2, b2, y_true):
     feature_maps = conv_layer_forward(image, kernels, stride=1, padding=0)
@@ -221,16 +223,17 @@ def backward(y_pred, y_true, cache, kernels, W1, W2):
     pooled_maps_grad = flatten_backward(flattened_grad, cache["pooled_maps"].shape)
     relu_out_grad = pool_layer_backward(cache["relu_out"], pooled_maps_grad, pool_size=2, stride=2)
     feature_maps_grad = relu_backward(relu_out_grad, cache["feature_maps"])
-    kernels_grad, image_grad = conv_layer_backward(cache["image"], kernels, feature_maps_grad, stride=1, padding=0)
+    kernels_grad, conv_biases_grad, image_grad = conv_layer_backward(cache["image"], kernels, feature_maps_grad, stride=1, padding=0)
 
-    return kernels_grad, dW1, db1, dW2, db2
+    return kernels_grad, conv_biases_grad, dW1, db1, dW2, db2
 
-def update(kernels, W1, W2, b1, b2, kernels_grad, dW1, dW2, db1, db2, lr):
+def update(kernels, W1, W2, b1, b2, kernels_grad, dW1, dW2, db1, db2, lr, conv_biases, conv_biases_grad):
     W1  = W1 - lr * dW1
     b1 = b1 - lr * db1
     W2  = W2 - lr * dW2
     b2 = b2 - lr * db2
     kernels = kernels - lr * kernels_grad
+    conv_biases -= lr * conv_biases_grad
     
     return kernels, W1, b1, W2, b2
 
@@ -241,41 +244,13 @@ def one_hot(label):
     return vector
 
 image = np.random.randn(28,28)
-kernels= np.random.randn(8,3,3) * 0.01
-W1 = np.random.randn(1352, 64) * 0.01
+kernels= np.random.randn(16,3,3) * np.sqrt(2/9)
+W1 = np.random.randn(2704, 64) * np.sqrt(2/2704)
 b1 = np.zeros(64)
-W2 = np.random.randn(64, 10) * 0.01
+W2 = np.random.randn(64, 10) * np.sqrt(2/64)
 b2 = np.zeros(10)
+conv_biases = np.zeros(16)
 
 train_images = load_mnist_images("train-images.idx3-ubyte")
 
 train_labels = load_mnist_labels("train-labels.idx1-ubyte")
-
-train_images = train_images[:1000]
-train_labels = train_labels[:1000]
-
-for epoch in range(20):
-    total_loss = 0
-
-    for image, label in zip(train_images,train_labels):
-        y_true = one_hot(label)
-        loss, y_pred, cache = forward(image, kernels, W1, b1, W2, b2, y_true)
-        kernels_grad, dW1, db1, dW2, db2 = backward(y_pred, y_true, cache, kernels, W1, W2)
-        kernels, W1, b1, W2, b2 = update(kernels, W1, W2, b1, b2, kernels_grad, dW1, dW2, db1, db2, 0.01)
-
-        total_loss += loss
-
-    print(f"Epoch {epoch}: "f"{total_loss:.4f}")
-
-    correct = 0
-
-    for image, label in zip(train_images,train_labels):
-        y_true = one_hot(label)
-        _, y_pred, _ = forward(image,kernels,W1,b1,W2,b2,y_true)
-        prediction = np.argmax(y_pred)
-
-        if prediction == label:
-            correct += 1
-
-    accuracy = (correct /len(train_images))
-    print(f"Accuracy: "f"{accuracy:.4f}")
