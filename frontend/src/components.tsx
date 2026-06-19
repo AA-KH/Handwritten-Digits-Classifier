@@ -96,7 +96,9 @@ export const useAppStore = create<AppStore>((set, get) => ({
 // 2. API utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BASE = '/api'
+// We use a relative /api path locally (proxied by Vite), but in production on Render 
+// it will hit the deployed backend URL passed via the VITE_API_URL environment variable.
+const BASE = import.meta.env.VITE_API_URL || '/api'
 
 export async function predictDigit(imageBase64: string) {
   const res = await fetch(`${BASE}/predict`, {
