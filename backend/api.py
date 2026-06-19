@@ -189,16 +189,41 @@ def preprocess_canvas_image(b64_data: str) -> np.ndarray:
     background.paste(img, mask=img.split()[3])
     img = background.convert("L")
 
-    # Resize to 28×28
-    img = img.resize((28, 28), Image.LANCZOS)
-    arr = np.array(img, dtype=np.float32) / 255.0
+    arr = np.array(img)
 
-    # MNIST convention: white digit on black background
-    # If the image is mostly light, invert it
-    if arr.mean() > 0.5:
-        arr = 1.0 - arr
+    mask = arr > 20
 
-    return arr
+    if not np.any(mask):
+        return np.zeros((28, 28), dtype=np.float32)
+
+    ys, xs = np.where(mask)
+
+    ymin, ymax = ys.min(), ys.max()
+    xmin, xmax = xs.min(), xs.max()
+
+    cropped = arr[ymin:ymax+1, xmin:xmax+1]
+
+    cropped = Image.fromarray(cropped)
+
+    cropped.thumbnail((20, 20), Image.LANCZOS)
+
+    digit = np.array(cropped)
+
+    output = np.zeros((28, 28), dtype=np.float32)
+
+    y_offset = (28 - digit.shape[0]) // 2
+    x_offset = (28 - digit.shape[1]) // 2
+
+    output[
+        y_offset:y_offset+digit.shape[0],
+        x_offset:x_offset+digit.shape[1]
+    ] = digit
+
+    output = output.astype(np.float32) / 255.0
+
+    output[output < 0.05] = 0
+
+    return output
 
 
 def normalise_maps(maps: np.ndarray) -> list:
@@ -230,6 +255,9 @@ def predict(req: PredictRequest):
 
     # 2. Run the CNN forward pass (untouched function from main.py)
     y_pred, cache = forward(image, kernels, conv_biases, W1, b1, W2, b2)
+
+    print("Predicted:", np.argmax(y_pred))
+    print(y_pred)
 
     latency_ms = (time.perf_counter() - t0) * 1000
 

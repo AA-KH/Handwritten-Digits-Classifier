@@ -1,6 +1,6 @@
 import numpy as np
 import struct
-from numba import njit
+from scipy.ndimage import rotate
 
 def load_mnist_images(filename):
     with open(filename, 'rb') as f:
@@ -243,6 +243,29 @@ def one_hot(label):
 
     return vector
 
+def augment(image):
+
+    if np.random.random() < 0.5:
+        return image
+
+    shift_y = np.random.randint(-2, 3)
+    shift_x = np.random.randint(-2, 3)
+
+    image = np.roll(image, shift_y, axis=0)
+    image = np.roll(image, shift_x, axis=1)
+
+    angle = np.random.uniform(-15, 15)
+
+    image = rotate(
+        image,
+        angle,
+        reshape=False,
+        mode="constant",
+        cval=0
+    )
+
+    return image
+
 image = np.random.randn(28,28)
 kernels= np.random.randn(16,3,3).astype(np.float32) * np.sqrt(2/9)
 W1 = np.random.randn(2704, 64).astype(np.float32) * np.sqrt(2/2704)
@@ -258,9 +281,9 @@ test_images = load_mnist_images("dataset/t10k-images.idx3-ubyte")
 test_labels = load_mnist_labels("dataset/t10k-labels.idx1-ubyte")
 train_labels_one_hot = np.eye(10, dtype=np.float32)[train_labels]
 
-train_images = train_images[:5000]
-train_labels = train_labels[:5000]
-train_labels_one_hot = train_labels_one_hot[:5000]
+train_images = train_images[:10000]
+train_labels = train_labels[:10000]
+train_labels_one_hot = train_labels_one_hot[:10000]
 
 best_accuracy = 0
 
@@ -291,6 +314,8 @@ for epoch in range(20):
         batch_loss = 0
 
         for image, y_true, label in zip(batch_images, batch_one_hot, batch_labels):
+
+            image = augment(image)
 
             y_pred, cache = forward(image, kernels, conv_biases, W1, b1, W2, b2)
             loss = cross_entropy(y_true, y_pred)
